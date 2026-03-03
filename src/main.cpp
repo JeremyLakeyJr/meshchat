@@ -139,6 +139,7 @@ void setup() {
         "Unknown"
 #endif
     );
+    Serial.printf(" Mode:  %s\n", FIRMWARE_MODE_NAME);
     Serial.println("========================================\n");
 
     // Derive node identity from ESP32 MAC
@@ -190,7 +191,11 @@ void setup() {
 
     displayHandler.drawStatusBar(loraOk, bleOk, true,
                                   loraHandler.lastRSSI(), 100);
-    displayHandler.showToast("MeshChat ready!", 2000);
+    {
+        char readyMsg[48];
+        snprintf(readyMsg, sizeof(readyMsg), "%s mode ready!", FIRMWARE_MODE_NAME);
+        displayHandler.showToast(readyMsg, 2000);
+    }
     Serial.println("[Main] Setup complete\n");
 }
 

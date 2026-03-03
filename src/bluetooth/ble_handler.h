@@ -33,10 +33,16 @@ public:
     size_t connectedPeers() const;
 
 private:
-    NimBLEServer*         _server    = nullptr;
-    NimBLECharacteristic* _txChar    = nullptr;
-    NimBLECharacteristic* _rxChar    = nullptr;
-    NimBLEScan*           _scan      = nullptr;
+    NimBLEServer*         _server      = nullptr;
+    NimBLECharacteristic* _txChar      = nullptr;
+    NimBLECharacteristic* _rxChar      = nullptr;
+#if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
+    // Meshtastic FromNum characteristic: notified (incremented) whenever a
+    // new FromRadio packet is available, so connected clients know to read it.
+    NimBLECharacteristic* _fromNumChar = nullptr;
+    uint32_t              _fromNum     = 0;
+#endif
+    NimBLEScan*           _scan        = nullptr;
 
     // Ring buffer for received packets (ISR-safe)
     static constexpr size_t RX_QUEUE_SIZE = 8;

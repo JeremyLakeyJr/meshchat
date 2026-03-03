@@ -24,10 +24,12 @@ bool LoRaHandler::begin(int sck, int miso, int mosi, int ss, int rst, int dio0) 
     LoRa.setTxPower(LORA_TX_POWER);
     LoRa.enableCrc();
 
-    Serial.printf("[LoRa] Radio ready @ %.0f MHz  SF%d  BW%.0fkHz\n",
+    Serial.printf("[LoRa] Mode: %s  %.3f MHz  SF%d  BW%.0fkHz  SyncWord=0x%02X\n",
+                  FIRMWARE_MODE_NAME,
                   (double)LORA_FREQ / 1e6,
                   LORA_SPREADING_FACTOR,
-                  (double)LORA_BANDWIDTH / 1e3);
+                  (double)LORA_BANDWIDTH / 1e3,
+                  LORA_SYNC_WORD);
     return true;
 }
 
