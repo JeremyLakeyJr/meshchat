@@ -1,13 +1,14 @@
 // ============================================================
 // BLE Handler Implementation (NimBLE-Arduino)
-// Supports two firmware modes (selected at compile time via FIRMWARE_MODE):
+// Supports two firmware modes, selected at runtime via
+// currentFirmwareMode (persisted in NVS):
 //
-//   FIRMWARE_MODE_MESHTASTIC – Advertises the Meshtastic BLE GATT
+//   FirmwareMode::Meshtastic – Advertises the Meshtastic BLE GATT
 //     service with ToRadio / FromRadio / FromNum characteristics,
 //     matching the Meshtastic device BLE API so that Meshtastic
 //     phone apps can discover and communicate with this node.
 //
-//   FIRMWARE_MODE_BITCHAT    – Advertises the Nordic UART Service
+//   FirmwareMode::BitChat    – Advertises the Nordic UART Service
 //     (NUS) used by BitChat, with writable RX and notifiable TX
 //     characteristics for peer-to-peer BLE mesh messaging.
 // ============================================================
@@ -77,47 +78,50 @@ bool BLEHandler::begin(const char* nodeName) {
     _server->setCallbacks(new BLESrvCallbacks());
 
     // Create service with the mode-appropriate UUID
-    NimBLEService* svc = _server->createService(BLE_SERVICE_UUID);
+    const char* svcUUID = (currentFirmwareMode == FirmwareMode::Meshtastic)
+                          ? BLE_MESHTASTIC_SERVICE_UUID
+                          : BLE_BITCHAT_SERVICE_UUID;
+    NimBLEService* svc = _server->createService(svcUUID);
 
-#if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-    // ── Meshtastic BLE GATT API ───────────────────────────────────────
-    // FromRadio (TX characteristic): notify-able, device → phone.
-    // Carries serialised Meshtastic FromRadio protobuf packets.
-    _txChar = svc->createCharacteristic(
-        BLE_TX_CHAR_UUID,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    if (currentFirmwareMode == FirmwareMode::Meshtastic) {
+        // ── Meshtastic BLE GATT API ───────────────────────────────────────
+        // FromRadio (TX characteristic): notify-able, device → phone.
+        // Carries serialised Meshtastic FromRadio protobuf packets.
+        _txChar = svc->createCharacteristic(
+            BLE_MESHTASTIC_TX_CHAR_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
-    // ToRadio (RX characteristic): writable, phone → device.
-    // Carries serialised Meshtastic ToRadio protobuf packets.
-    _rxChar = svc->createCharacteristic(
-        BLE_RX_CHAR_UUID,
-        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    _rxChar->setCallbacks(new BLECharCallbacks(this));
+        // ToRadio (RX characteristic): writable, phone → device.
+        // Carries serialised Meshtastic ToRadio protobuf packets.
+        _rxChar = svc->createCharacteristic(
+            BLE_MESHTASTIC_RX_CHAR_UUID,
+            NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+        _rxChar->setCallbacks(new BLECharCallbacks(this));
 
-    // FromNum: notify-only counter incremented when a new FromRadio
-    // packet is waiting; Meshtastic apps use this to trigger a read.
-    _fromNumChar = svc->createCharacteristic(
-        BLE_FROMNUM_CHAR_UUID,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    uint32_t initialFromNum = 0;
-    _fromNumChar->setValue((uint8_t*)&initialFromNum, sizeof(initialFromNum));
+        // FromNum: notify-only counter incremented when a new FromRadio
+        // packet is waiting; Meshtastic apps use this to trigger a read.
+        _fromNumChar = svc->createCharacteristic(
+            BLE_MESHTASTIC_FROMNUM_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+        uint32_t initialFromNum = 0;
+        _fromNumChar->setValue((uint8_t*)&initialFromNum, sizeof(initialFromNum));
 
-    Serial.printf("[BLE] Meshtastic service advertising as \"%s\"\n", nodeName);
-#else
-    // ── BitChat – Nordic UART Service (NUS) ──────────────────────────
-    // TX characteristic: notify-able, device → phone.
-    _txChar = svc->createCharacteristic(
-        BLE_TX_CHAR_UUID,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+        Serial.printf("[BLE] Meshtastic service advertising as \"%s\"\n", nodeName);
+    } else {
+        // ── BitChat – Nordic UART Service (NUS) ──────────────────────────
+        // TX characteristic: notify-able, device → phone.
+        _txChar = svc->createCharacteristic(
+            BLE_BITCHAT_TX_CHAR_UUID,
+            NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
-    // RX characteristic: writable, phone → device.
-    _rxChar = svc->createCharacteristic(
-        BLE_RX_CHAR_UUID,
-        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    _rxChar->setCallbacks(new BLECharCallbacks(this));
+        // RX characteristic: writable, phone → device.
+        _rxChar = svc->createCharacteristic(
+            BLE_BITCHAT_RX_CHAR_UUID,
+            NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+        _rxChar->setCallbacks(new BLECharCallbacks(this));
 
-    Serial.printf("[BLE] BitChat (NUS) service advertising as \"%s\"\n", nodeName);
-#endif
+        Serial.printf("[BLE] BitChat (NUS) service advertising as \"%s\"\n", nodeName);
+    }
 
     svc->start();
     startAdvertising(nodeName);
@@ -134,15 +138,15 @@ void BLEHandler::sendPacket(const MeshPacket& pkt) {
     _txChar->setValue((const uint8_t*)&pkt, totalLen);
     _txChar->notify();
 
-#if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-    // Increment the Meshtastic FromNum counter and notify connected clients
-    // so that Meshtastic phone apps know a new FromRadio packet is ready.
-    if (_fromNumChar) {
-        _fromNum++;
-        _fromNumChar->setValue((uint8_t*)&_fromNum, sizeof(_fromNum));
-        _fromNumChar->notify();
+    if (currentFirmwareMode == FirmwareMode::Meshtastic) {
+        // Increment the Meshtastic FromNum counter and notify connected clients
+        // so that Meshtastic phone apps know a new FromRadio packet is ready.
+        if (_fromNumChar) {
+            _fromNum++;
+            _fromNumChar->setValue((uint8_t*)&_fromNum, sizeof(_fromNum));
+            _fromNumChar->notify();
+        }
     }
-#endif
 }
 
 bool BLEHandler::receivePacket(MeshPacket& pkt) {
@@ -170,7 +174,9 @@ size_t BLEHandler::connectedPeers() const {
 
 void BLEHandler::startAdvertising(const char* name) {
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-    adv->addServiceUUID(BLE_SERVICE_UUID);
+    adv->addServiceUUID(currentFirmwareMode == FirmwareMode::Meshtastic
+                        ? BLE_MESHTASTIC_SERVICE_UUID
+                        : BLE_BITCHAT_SERVICE_UUID);
     adv->setScanResponse(true);
     adv->setMinPreferred(0x06);
     NimBLEDevice::startAdvertising();

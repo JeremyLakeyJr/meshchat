@@ -17,19 +17,36 @@ bool LoRaHandler::begin(int sck, int miso, int mosi, int ss, int rst, int dio0) 
         return false;
     }
 
-    LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
-    LoRa.setSignalBandwidth((long)LORA_BANDWIDTH);
+    // Select parameters based on the active runtime mode
+    int   sf;
+    long  bw;
+    int   syncWord;
+    int   txPower;
+    if (currentFirmwareMode == FirmwareMode::Meshtastic) {
+        sf       = LORA_SF_MESHTASTIC;
+        bw       = (long)LORA_BW_MESHTASTIC;
+        syncWord = LORA_SYNCWORD_MESHTASTIC;
+        txPower  = LORA_POWER_MESHTASTIC;
+    } else {
+        sf       = LORA_SF_BITCHAT;
+        bw       = (long)LORA_BW_BITCHAT;
+        syncWord = LORA_SYNCWORD_BITCHAT;
+        txPower  = LORA_POWER_BITCHAT;
+    }
+
+    LoRa.setSpreadingFactor(sf);
+    LoRa.setSignalBandwidth(bw);
     LoRa.setCodingRate4(LORA_CODING_RATE);
-    LoRa.setSyncWord(LORA_SYNC_WORD);
-    LoRa.setTxPower(LORA_TX_POWER);
+    LoRa.setSyncWord(syncWord);
+    LoRa.setTxPower(txPower);
     LoRa.enableCrc();
 
     Serial.printf("[LoRa] Mode: %s  %.3f MHz  SF%d  BW%.0fkHz  SyncWord=0x%02X\n",
-                  FIRMWARE_MODE_NAME,
+                  modeName(currentFirmwareMode),
                   (double)LORA_FREQ / 1e6,
-                  LORA_SPREADING_FACTOR,
-                  (double)LORA_BANDWIDTH / 1e3,
-                  LORA_SYNC_WORD);
+                  sf,
+                  (double)bw / 1e3,
+                  syncWord);
     return true;
 }
 

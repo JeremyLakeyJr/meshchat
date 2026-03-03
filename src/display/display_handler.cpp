@@ -184,10 +184,13 @@ void DisplayHandler::drawStatusBarOLED(bool loraOk, bool bleOk, bool wifiOk,
 #ifdef HAS_OLED
     oled.fillRect(0, 0, OLED_WIDTH, 8, SSD1306_BLACK);
     oled.setCursor(0, 0);
+    // Show active mode abbreviation then transport status indicators
+    oled.print(currentFirmwareMode == FirmwareMode::Meshtastic ? "MT" : "BC");
+    oled.print(" ");
     oled.print(loraOk  ? "L" : "l");
     oled.print(bleOk   ? "B" : "b");
     oled.print(wifiOk  ? "W" : "w");
-    oled.printf(" %ddBm  %d%%", loraRSSI, battPct);
+    oled.printf(" %d%%", battPct);
     oled.display();
 #endif
 }
@@ -206,8 +209,9 @@ void DisplayHandler::drawStatusBarTFT(bool loraOk, bool bleOk, bool wifiOk,
     // WiFi indicator
     tft.setCursor(x, 2); tft.setTextColor(wifiOk ? COLOR_GREEN : COLOR_RED, COLOR_GRAY);
     tft.print("WiFi"); x += 48;
-    // RSSI
+    // RSSI + battery + active mode
     tft.setCursor(x, 2); tft.setTextColor(COLOR_FG, COLOR_GRAY);
-    tft.printf("%ddBm  Bat:%d%%", loraRSSI, battPct);
+    tft.printf("%ddBm  %d%%  [%s]", loraRSSI, battPct,
+               currentFirmwareMode == FirmwareMode::Meshtastic ? "MT" : "BC");
 #endif
 }
