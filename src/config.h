@@ -8,32 +8,36 @@
 #include <Arduino.h>
 
 // ----------------------------------------------------------
-// Firmware mode selection
+// Firmware mode selection  (runtime, stored in NVS)
 //
-//   FIRMWARE_MODE_MESHTASTIC  – LoRa parameters and BLE API are
-//     fully compatible with the Meshtastic open-source mesh
-//     network (sync word 0x2B, LongFast SF11/BW250, Meshtastic
-//     BLE GATT service).
+//   FirmwareMode::BitChat     – BLE uses the Nordic UART Service
+//     (NUS) as used by BitChat; LoRa uses MeshChat parameters
+//     (SF10, BW125 kHz, sync 0x34, 14 dBm).
 //
-//   FIRMWARE_MODE_BITCHAT     – BLE-primary operation using the
-//     Nordic UART Service (NUS) UUIDs used by BitChat, with
-//     standard LoRa parameters for the MeshChat custom mesh.
+//   FirmwareMode::Meshtastic  – LoRa parameters and BLE GATT API
+//     are fully compatible with the Meshtastic mesh network
+//     (sync word 0x2B, LongFast SF11/BW250, Meshtastic GATT).
 //
-// Select a mode by setting -DFIRMWARE_MODE=<value> in
-// platformio.ini build_flags, or it defaults to BitChat.
+// The active mode is persisted in NVS (Preferences library) and
+// can be changed at runtime via the `!mode`, `!bitchat`, or
+// `!meshtastic` commands on the serial console or T-Deck keyboard.
 // ----------------------------------------------------------
-#define FIRMWARE_MODE_MESHTASTIC  1
-#define FIRMWARE_MODE_BITCHAT     2
+enum class FirmwareMode : uint8_t {
+    BitChat    = 1,
+    Meshtastic = 2,
+};
 
-#ifndef FIRMWARE_MODE
-  #define FIRMWARE_MODE  FIRMWARE_MODE_BITCHAT
-#endif
+#define MESHCHAT_NVS_NAMESPACE  "meshchat"
+#define MESHCHAT_NVS_MODE_KEY   "mode"
+#define MESHCHAT_DEFAULT_MODE   FirmwareMode::BitChat
 
-#if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-  #define FIRMWARE_MODE_NAME  "Meshtastic"
-#else
-  #define FIRMWARE_MODE_NAME  "BitChat"
-#endif
+inline const char* modeName(FirmwareMode m) {
+    return (m == FirmwareMode::Meshtastic) ? "Meshtastic" : "BitChat";
+}
+
+// Global active mode – defined in main.cpp, declared here so all
+// translation units can read it without pulling in Preferences.h.
+extern FirmwareMode currentFirmwareMode;
 
 // ----------------------------------------------------------
 // Device identity (can be overridden per-board in platformio.ini)
@@ -45,54 +49,33 @@
 // ----------------------------------------------------------
 // LoRa radio defaults
 //
-// Meshtastic mode uses the Meshtastic LongFast channel preset:
+// Both sets of parameters are compiled in; the active mode
+// (currentFirmwareMode) selects which values are used at runtime.
+//
+// Meshtastic LongFast channel preset:
 //   SF11, BW250 kHz, CR 4/5, sync word 0x2B, 17 dBm TX.
 //   Reference: https://meshtastic.org/docs/overview/radio-settings
 //
-// BitChat mode uses the MeshChat custom channel:
+// BitChat MeshChat custom channel:
 //   SF10, BW125 kHz, CR 4/5, sync word 0x34, 14 dBm TX.
-//
-// All values can be overridden individually in platformio.ini.
 // ----------------------------------------------------------
 #ifndef LORA_FREQ
   #define LORA_FREQ   915E6    // 915 MHz (US); use 868E6 for EU
 #endif
 
-#ifndef LORA_BANDWIDTH
-  #if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-    #define LORA_BANDWIDTH  250E3   // Meshtastic LongFast: 250 kHz
-  #else
-    #define LORA_BANDWIDTH  125E3   // BitChat MeshChat: 125 kHz
-  #endif
-#endif
+#define LORA_CODING_RATE  5   // 4/5 coding rate (both modes)
 
-#ifndef LORA_SPREADING_FACTOR
-  #if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-    #define LORA_SPREADING_FACTOR  11   // Meshtastic LongFast: SF11
-  #else
-    #define LORA_SPREADING_FACTOR  10   // BitChat MeshChat: SF10
-  #endif
-#endif
+// BitChat MeshChat parameters
+#define LORA_SF_BITCHAT        10
+#define LORA_BW_BITCHAT        125E3
+#define LORA_SYNCWORD_BITCHAT  0x34
+#define LORA_POWER_BITCHAT     14
 
-#ifndef LORA_CODING_RATE
-  #define LORA_CODING_RATE  5   // 4/5 coding rate (both modes)
-#endif
-
-#ifndef LORA_SYNC_WORD
-  #if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-    #define LORA_SYNC_WORD  0x2B   // Meshtastic private network identifier
-  #else
-    #define LORA_SYNC_WORD  0x34   // BitChat MeshChat network identifier
-  #endif
-#endif
-
-#ifndef LORA_TX_POWER
-  #if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-    #define LORA_TX_POWER   17     // dBm – Meshtastic default
-  #else
-    #define LORA_TX_POWER   14     // dBm – BitChat MeshChat default
-  #endif
-#endif
+// Meshtastic LongFast parameters
+#define LORA_SF_MESHTASTIC        11
+#define LORA_BW_MESHTASTIC        250E3
+#define LORA_SYNCWORD_MESHTASTIC  0x2B
+#define LORA_POWER_MESHTASTIC     17
 
 // ----------------------------------------------------------
 // Mesh protocol constants
@@ -108,30 +91,33 @@
 // ----------------------------------------------------------
 // BLE service / characteristic UUIDs
 //
-// Meshtastic mode uses the official Meshtastic BLE GATT service:
+// Both sets of UUIDs are compiled in; the active mode selects
+// which service is created and advertised at runtime.
+//
+// Meshtastic BLE GATT service:
 //   Service  : 6BA1B218-15A8-461F-9FA8-5D651DEF2B57
 //   ToRadio  : F75C76D2-129E-4DAD-A1DD-7866124401E7  (write)
 //   FromRadio: 2C55E69E-4993-11ED-B878-0242AC120002  (notify)
 //   FromNum  : ED9DA18C-A800-4F66-A670-AA7547ED661A  (notify)
 //   Reference: https://github.com/meshtastic/Meshtastic-device
 //
-// BitChat mode uses the Nordic UART Service (NUS):
+// BitChat – Nordic UART Service (NUS):
 //   Service  : 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
 //   RX (write): 6E400002-B5A3-F393-E0A9-E50E24DCCA9E
 //   TX (notify): 6E400003-B5A3-F393-E0A9-E50E24DCCA9E
 //   Reference: https://github.com/bitchat
 // ----------------------------------------------------------
-#if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
-  #define BLE_SERVICE_UUID       "6BA1B218-15A8-461F-9FA8-5D651DEF2B57"
-  #define BLE_RX_CHAR_UUID       "F75C76D2-129E-4DAD-A1DD-7866124401E7"  // ToRadio
-  #define BLE_TX_CHAR_UUID       "2C55E69E-4993-11ED-B878-0242AC120002"  // FromRadio
-  #define BLE_FROMNUM_CHAR_UUID  "ED9DA18C-A800-4F66-A670-AA7547ED661A"  // FromNum
-#else
-  // BitChat – Nordic UART Service
-  #define BLE_SERVICE_UUID       "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-  #define BLE_RX_CHAR_UUID       "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-  #define BLE_TX_CHAR_UUID       "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-#endif
+
+// Meshtastic GATT UUIDs
+#define BLE_MESHTASTIC_SERVICE_UUID   "6BA1B218-15A8-461F-9FA8-5D651DEF2B57"
+#define BLE_MESHTASTIC_RX_CHAR_UUID   "F75C76D2-129E-4DAD-A1DD-7866124401E7"
+#define BLE_MESHTASTIC_TX_CHAR_UUID   "2C55E69E-4993-11ED-B878-0242AC120002"
+#define BLE_MESHTASTIC_FROMNUM_UUID   "ED9DA18C-A800-4F66-A670-AA7547ED661A"
+
+// BitChat / Nordic UART Service UUIDs
+#define BLE_BITCHAT_SERVICE_UUID  "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define BLE_BITCHAT_RX_CHAR_UUID  "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+#define BLE_BITCHAT_TX_CHAR_UUID  "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
 #define BLE_SCAN_INTERVAL_MS   5000    // scan for peers every 5 s
 #define BLE_MAX_PACKET_SIZE    512     // bytes per BLE write

@@ -36,12 +36,11 @@ private:
     NimBLEServer*         _server      = nullptr;
     NimBLECharacteristic* _txChar      = nullptr;
     NimBLECharacteristic* _rxChar      = nullptr;
-#if FIRMWARE_MODE == FIRMWARE_MODE_MESHTASTIC
     // Meshtastic FromNum characteristic: notified (incremented) whenever a
     // new FromRadio packet is available, so connected clients know to read it.
+    // Only used when the active mode is Meshtastic.
     NimBLECharacteristic* _fromNumChar = nullptr;
     uint32_t              _fromNum     = 0;
-#endif
     NimBLEScan*           _scan        = nullptr;
 
     // Ring buffer for received packets (ISR-safe)

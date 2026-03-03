@@ -15,6 +15,7 @@
 
 #include <Arduino.h>
 #include <esp_mac.h>
+#include <Preferences.h>
 #include "config.h"
 #include "lora/lora_handler.h"
 #include "bluetooth/ble_handler.h"
@@ -22,6 +23,72 @@
 #include "display/display_handler.h"
 #include "mesh/mesh_router.h"
 #include "chat/chat_manager.h"
+
+// -------------------------------------------------------------------
+// Runtime firmware mode (persisted in NVS; default = BitChat)
+// -------------------------------------------------------------------
+FirmwareMode currentFirmwareMode = MESHCHAT_DEFAULT_MODE;
+
+static void loadMode() {
+    Preferences prefs;
+    prefs.begin(MESHCHAT_NVS_NAMESPACE, /*readOnly=*/true);
+    uint8_t stored = prefs.getUChar(MESHCHAT_NVS_MODE_KEY,
+                                     (uint8_t)MESHCHAT_DEFAULT_MODE);
+    prefs.end();
+    currentFirmwareMode = (stored == (uint8_t)FirmwareMode::Meshtastic)
+                          ? FirmwareMode::Meshtastic
+                          : FirmwareMode::BitChat;
+}
+
+static void saveMode(FirmwareMode m) {
+    Preferences prefs;
+    prefs.begin(MESHCHAT_NVS_NAMESPACE, /*readOnly=*/false);
+    prefs.putUChar(MESHCHAT_NVS_MODE_KEY, (uint8_t)m);
+    prefs.end();
+}
+
+// Save the requested mode to NVS and restart the device to apply it.
+// The toast is shown for MODE_SWITCH_TOAST_MS and the restart fires
+// shortly after to ensure the display has updated.
+static constexpr uint16_t MODE_SWITCH_TOAST_MS    = 1200;
+static constexpr uint16_t MODE_SWITCH_RESTART_MS  = MODE_SWITCH_TOAST_MS + 100;
+
+static void switchMode(FirmwareMode next) {
+    saveMode(next);
+    Serial.printf("[Main] Switching to %s mode — restarting...\n",
+                  modeName(next));
+    char msg[40];
+    snprintf(msg, sizeof(msg), "Mode: %s — restarting", modeName(next));
+    displayHandler.showToast(msg, MODE_SWITCH_TOAST_MS);
+    delay(MODE_SWITCH_RESTART_MS);
+    ESP.restart();
+}
+
+// Parse and handle a mode-switch command string.
+// Returns true when the input was a recognised command.
+static bool handleModeCommand(const String& cmd) {
+    if (cmd == "!mode") {
+        switchMode(currentFirmwareMode == FirmwareMode::BitChat
+                   ? FirmwareMode::Meshtastic
+                   : FirmwareMode::BitChat);
+        return true;
+    }
+    if (cmd == "!bitchat") {
+        if (currentFirmwareMode != FirmwareMode::BitChat)
+            switchMode(FirmwareMode::BitChat);
+        else
+            Serial.println("[Main] Already in BitChat mode");
+        return true;
+    }
+    if (cmd == "!meshtastic") {
+        if (currentFirmwareMode != FirmwareMode::Meshtastic)
+            switchMode(FirmwareMode::Meshtastic);
+        else
+            Serial.println("[Main] Already in Meshtastic mode");
+        return true;
+    }
+    return false;
+}
 
 // -------------------------------------------------------------------
 // Timing
@@ -106,8 +173,10 @@ static void pollKeyboard() {
         char c = (char)Wire.read();
         if (c == '\r' || c == '\n') {
             if (_inputBuffer.length() > 0) {
-                chatManager.sendMessage(_inputBuffer.c_str());
+                String cmd = _inputBuffer;
                 _inputBuffer = "";
+                if (!handleModeCommand(cmd))
+                    chatManager.sendMessage(cmd.c_str());
             }
         } else if (c == 0x08 || c == 0x7F) {  // backspace
             if (_inputBuffer.length() > 0) {
@@ -126,6 +195,10 @@ static void pollKeyboard() {
 void setup() {
     Serial.begin(115200);
     delay(500);
+
+    // Load persisted mode from NVS before any hardware init
+    loadMode();
+
     Serial.println("\n========================================");
     Serial.println(" MeshChat - LoRa ESP32 Hybrid OS");
     Serial.printf(" Board: %s\n",
@@ -139,7 +212,7 @@ void setup() {
         "Unknown"
 #endif
     );
-    Serial.printf(" Mode:  %s\n", FIRMWARE_MODE_NAME);
+    Serial.printf(" Mode:  %s\n", modeName(currentFirmwareMode));
     Serial.println("========================================\n");
 
     // Derive node identity from ESP32 MAC
@@ -193,7 +266,7 @@ void setup() {
                                   loraHandler.lastRSSI(), 100);
     {
         char readyMsg[48];
-        snprintf(readyMsg, sizeof(readyMsg), "%s mode ready!", FIRMWARE_MODE_NAME);
+        snprintf(readyMsg, sizeof(readyMsg), "%s mode ready!", modeName(currentFirmwareMode));
         displayHandler.showToast(readyMsg, 2000);
     }
     Serial.println("[Main] Setup complete\n");
@@ -237,8 +310,10 @@ void loop() {
         String line = Serial.readStringUntil('\n');
         line.trim();
         if (line.length() > 0) {
-            chatManager.sendMessage(line.c_str());
-            Serial.printf("[Serial] Sent: %s\n", line.c_str());
+            if (!handleModeCommand(line)) {
+                chatManager.sendMessage(line.c_str());
+                Serial.printf("[Serial] Sent: %s\n", line.c_str());
+            }
         }
     }
 
